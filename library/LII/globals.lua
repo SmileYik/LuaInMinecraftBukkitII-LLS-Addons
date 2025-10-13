@@ -1,5 +1,5 @@
 ---@type luajava
-local luajava = {}
+luajava = {}
 
 ---@type luaBukkit
-local luaBukkit = {}
+luaBukkit = {}

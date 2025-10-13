@@ -1,4 +1,4 @@
----@meta luajava
+---@meta
 
 ---Luajava
 ---@class luajava
@@ -11,7 +11,7 @@ function luajava.bindClass(className) end
 
 ---Convert a java class instance to a java object instance. (Then you can use Class<?> methods)
 ---@param clazz any java class instance
----@return any
+---@return java.lang.Class
 function luajava.class2Obj(clazz) end
 
 ---New java class instance
