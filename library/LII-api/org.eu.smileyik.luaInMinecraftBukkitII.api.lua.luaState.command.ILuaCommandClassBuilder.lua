@@ -5,9 +5,9 @@ local ILuaCommandClassBuilder = {}
 
 ---设定指令别名, 当且仅当该指令为顶级指令时有效
 ---@public
----@param aliases table 别名
+---@param ... string|string[] 别名
 ---@return org.eu.smileyik.luaInMinecraftBukkitII.api.lua.luaState.command.ILuaCommandClassBuilder 构造器
-function ILuaCommandClassBuilder:aliases(aliases) end
+function ILuaCommandClassBuilder:aliases(...) end
 
 ---设置该类中所有指令都需要玩家才能执行.
 ---@public
@@ -40,9 +40,9 @@ function ILuaCommandClassBuilder:command(table) end
 
 ---添加若干数量指令
 ---@public
----@param tables table lua table 数组
+---@param ... table|table[] lua table 数组
 ---@return org.eu.smileyik.luaInMinecraftBukkitII.api.lua.luaState.command.ILuaCommandClassBuilder 此构造器
-function ILuaCommandClassBuilder:commands(tables) end
+function ILuaCommandClassBuilder:commands(...) end
 
 ---添加一个指令.
 ---@public
@@ -63,7 +63,7 @@ function ILuaCommandClassBuilder:command(callable, command, description) end
 ---@public
 ---@param callable function lua闭包
 ---@param command string 指令名称
----@param args table 指令参数
+---@param args string[] 指令参数
 ---@return org.eu.smileyik.luaInMinecraftBukkitII.api.lua.luaState.command.ILuaCommandClassBuilder 此构造器
 function ILuaCommandClassBuilder:command(callable, command, args) end
 
@@ -71,7 +71,7 @@ function ILuaCommandClassBuilder:command(callable, command, args) end
 ---@public
 ---@param callable function lua闭包
 ---@param command string 指令名称
----@param args table 指令参数
+---@param args string[] 指令参数
 ---@param description string 指令描述
 ---@return org.eu.smileyik.luaInMinecraftBukkitII.api.lua.luaState.command.ILuaCommandClassBuilder 此构造器
 function ILuaCommandClassBuilder:command(callable, command, args, description) end
@@ -80,7 +80,7 @@ function ILuaCommandClassBuilder:command(callable, command, args, description) e
 ---@public
 ---@param callable function lua闭包
 ---@param command string 指令名称
----@param args table 指令参数
+---@param args string[] 指令参数
 ---@param description string 指令描述
 ---@param permission string 指令权限
 ---@return org.eu.smileyik.luaInMinecraftBukkitII.api.lua.luaState.command.ILuaCommandClassBuilder 此构造器
@@ -90,7 +90,7 @@ function ILuaCommandClassBuilder:command(callable, command, args, description, p
 ---@public
 ---@param callable function lua闭包
 ---@param command string 指令名称
----@param args table 指令参数
+---@param args string[] 指令参数
 ---@param description string 指令描述
 ---@param permission string 指令权限
 ---@param needPlayer boolean 是否需要玩家执行
@@ -101,7 +101,7 @@ function ILuaCommandClassBuilder:command(callable, command, args, description, p
 ---@public
 ---@param callable function lua闭包
 ---@param command string 指令名称
----@param args table 指令参数
+---@param args string[] 指令参数
 ---@param description string 指令描述
 ---@param permission string 指令权限
 ---@param needPlayer boolean 是否需要玩家执行
@@ -112,9 +112,9 @@ function ILuaCommandClassBuilder:command(callable, command, args, description, p
 ---构建指令类型.
 ---@public
 ---@param metaTable table lua table,                     有效字段为 command(必填),                     aliases, description, permission, needPlayer, parentCommand
----@param commandTables table 与commands方法类似.
+---@param ... table|table[] 与commands方法类似.
 ---@return java.lang.Class 指令类型
-function ILuaCommandClassBuilder:build(metaTable, commandTables) end
+function ILuaCommandClassBuilder:build(metaTable, ...) end
 
 ---构建指令
 ---@public

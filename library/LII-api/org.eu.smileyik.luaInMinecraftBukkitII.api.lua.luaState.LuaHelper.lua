@@ -34,9 +34,9 @@ function LuaHelper:syncCall(callable) end
 ---同步运行 Lua 闭包, 并传入参数.
 ---@public
 ---@param callable function Lua 闭包
----@param params table 传入 Lua 闭包的参数.
+---@param ... any|any[] 传入 Lua 闭包的参数.
 ---@return java.util.concurrent.CompletableFuture Future<Object>
-function LuaHelper:syncCall(callable, params) end
+function LuaHelper:syncCall(callable, ...) end
 
 ---同步延迟运行 Lua 闭包
 ---@public
@@ -49,9 +49,9 @@ function LuaHelper:syncCallLater(callable, tick) end
 ---@public
 ---@param callable function Lua 闭包
 ---@param tick number 延迟, 单位: tick
----@param params table 传入闭包的参数.
+---@param ... any|any[] 传入闭包的参数.
 ---@return java.util.concurrent.CompletableFuture Future<Object>
-function LuaHelper:syncCallLater(callable, tick, params) end
+function LuaHelper:syncCallLater(callable, tick, ...) end
 
 ---同步执行计时器. 调用该方法则有责任管理该计时器, 请在不需要的时候释放它.
 ---@public
@@ -66,9 +66,9 @@ function LuaHelper:syncTimer(callable, delay, period) end
 ---@param callable function Lua 闭包
 ---@param delay number 延迟执行, 单位: tick
 ---@param period number 间隔执行, 单位: tick
----@param params table 传入闭包参数.
+---@param ... any|any[] 传入闭包参数.
 ---@return org.eu.smileyik.luaInMinecraftBukkitII.scheduler.ScheduledTaskWrapper ScheduledTaskWrapper<?>
-function LuaHelper:syncTimer(callable, delay, period, params) end
+function LuaHelper:syncTimer(callable, delay, period, ...) end
 
 ---异步调用 Lua 闭包.
 ---@public
@@ -79,9 +79,9 @@ function LuaHelper:asyncCall(callable) end
 ---异步调用 Lua 闭包.
 ---@public
 ---@param callable function Lua 闭包
----@param params table 传入闭包的参数
+---@param ... any|any[] 传入闭包的参数
 ---@return java.util.concurrent.CompletableFuture Future<Object>
-function LuaHelper:asyncCall(callable, params) end
+function LuaHelper:asyncCall(callable, ...) end
 
 ---异步调用 Lua 闭包.
 ---@public
@@ -94,9 +94,9 @@ function LuaHelper:asyncCallLater(callable, tick) end
 ---@public
 ---@param callable function Lua 闭包
 ---@param tick number 延迟执行, 单位: tick
----@param params table 传入闭包的参数
+---@param ... any|any[] 传入闭包的参数
 ---@return java.util.concurrent.CompletableFuture Future<Object>
-function LuaHelper:asyncCallLater(callable, tick, params) end
+function LuaHelper:asyncCallLater(callable, tick, ...) end
 
 ---异步调用 Lua 闭包.
 ---@public
@@ -111,9 +111,9 @@ function LuaHelper:asyncTimer(callable, delay, period) end
 ---@param callable function Lua 闭包
 ---@param delay number 延迟执行, 单位: tick
 ---@param period number 间隔执行, 单位: tick
----@param params table 传入闭包的参数
+---@param ... any|any[] 传入闭包的参数
 ---@return org.eu.smileyik.luaInMinecraftBukkitII.scheduler.ScheduledTaskWrapper Future<Object>
-function LuaHelper:asyncTimer(callable, delay, period, params) end
+function LuaHelper:asyncTimer(callable, delay, period, ...) end
 
 ---将 lua 中的数组风格表转换为指定类型的 Java 数组.
 ---@public

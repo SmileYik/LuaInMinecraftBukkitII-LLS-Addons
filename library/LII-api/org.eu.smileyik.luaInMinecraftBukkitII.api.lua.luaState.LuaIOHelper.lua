@@ -22,13 +22,13 @@ function LuaIOHelper:transfer(inputStream, outputStream, bufferSize) end
 ---@public
 ---@param inputStream org.eu.smileyik.luaInMinecraftBukkitII.api.lua.luaState.InputStream 输入流
 ---@param bufferSize number 缓冲大小
----@return table 读入的所有字节
+---@return number[] 读入的所有字节
 function LuaIOHelper:readBytes(inputStream, bufferSize) end
 
 ---写入所有字节到输出流中. 不会关闭流.
 ---@public
 ---@param outputStream org.eu.smileyik.luaInMinecraftBukkitII.api.lua.luaState.OutputStream 输出流
----@param bytes table 要写出的字节
+---@param bytes number[] 要写出的字节
 ---@return nil 
 function LuaIOHelper:writeBytes(outputStream, bytes) end
 

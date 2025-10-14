@@ -4,9 +4,9 @@ local ILuaCommandBuilder = {}
 
 ---指令所需要的参数, 这里的参数用于匹配指令长度, 并且给予执行指令人员提示.例如这个指令: <code>/myCommand kill [player_name]</code>, <code>kill</code>是指令名称, 而<code>player_name</code>是一个由执行者提供的参数.所以构建这个指令时, 需要使用这个方法去声明需要提供的参数.对于该例子来说, 可以这样实现:<pre><code>    luaBukkit.env:commandClassBuilder()        :command("kill")            :args({"player_name"})            :handler(function (sender, args) doSomeThing() end)        :build("myCommand")</code></pre>
 ---@public
----@param args table 指令参数
+---@param ... string|string[] 指令参数
 ---@return org.eu.smileyik.luaInMinecraftBukkitII.api.lua.luaState.command.ILuaCommandBuilder 构造器
-function ILuaCommandBuilder:args(args) end
+function ILuaCommandBuilder:args(...) end
 
 ---添加对该指令的简单描述.
 ---@public

@@ -21,8 +21,8 @@ function ILuaStatePluginEnv:evalLua(luaScript) end
 ---执行全局 Lua 闭包变量.
 ---@public
 ---@param globalClosureName string 闭包名
----@param params table 参数
+---@param ... any|any[] 参数
 ---@return org.eu.smileyik.luajava.exception.Result 执行结果.
-function ILuaStatePluginEnv:callClosure(globalClosureName, params) end
+function ILuaStatePluginEnv:callClosure(globalClosureName, ...) end
 
 return ILuaStatePluginEnv

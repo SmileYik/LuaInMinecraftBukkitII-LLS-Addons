@@ -3,8 +3,8 @@
 ---@class org.eu.smileyik.luaInMinecraftBukkitII.api.lua.luaState.command.CommandProperties: java.lang.Object
 ---@field private command string 指令名称, 必填
 ---@field private parentCommand string 父指令名称, 可选, 用于标记一个指令类的父指令类型
----@field private aliases table 指令别名, 可选, 构建顶级指令类以及注册指令时可能需要用到.
----@field private args table 指令参数, 可选, 仅在添加指令方法时才会用到(也就是调用command方法时需要)
+---@field private aliases string[] 指令别名, 可选, 构建顶级指令类以及注册指令时可能需要用到.
+---@field private args string[] 指令参数, 可选, 仅在添加指令方法时才会用到(也就是调用command方法时需要)
 ---@field private description string 指令描述, 可选
 ---@field private permission string 指令权限, 可选
 ---@field private needPlayer boolean 是否只能由玩家执行指令, 可选

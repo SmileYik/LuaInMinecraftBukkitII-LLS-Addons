@@ -59,9 +59,9 @@ function ILuaEventListenerBuilder:subscribe(table) end
 
 ---与<code>subscribe(LuaTable)</code>类似, 但是是接受一个LuaTable数组(数组风格LuaTable),以批量订阅事件.
 ---@public
----@param tables table table组成的数组, 形似与<code>local tables = {{}, {}, {}}</code>
+---@param ... table|table[] table组成的数组, 形似与<code>local tables = {{}, {}, {}}</code>
 ---@return org.eu.smileyik.luaInMinecraftBukkitII.api.lua.luaState.event.ILuaEventListenerBuilder 此构建器
-function ILuaEventListenerBuilder:subscribes(tables) end
+function ILuaEventListenerBuilder:subscribes(...) end
 
 ---构造未监听的事件实例.
 ---@public

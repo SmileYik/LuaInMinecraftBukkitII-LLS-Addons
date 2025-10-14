@@ -33,10 +33,6 @@ function ILuaStateManager:destroyPluginEnv(plugin) end
 ---@return org.eu.smileyik.luaInMinecraftBukkitII.api.luaState.ILuaStateEnv Lua 实例
 function ILuaStateManager:getEnv(id) end
 
----@public
----@return java.util.Collection 
-function ILuaStateManager:getScriptEnvIds() end
-
 ---获取仅允许脚本的 Lua 环境.
 ---@public
 ---@return java.util.Collection 

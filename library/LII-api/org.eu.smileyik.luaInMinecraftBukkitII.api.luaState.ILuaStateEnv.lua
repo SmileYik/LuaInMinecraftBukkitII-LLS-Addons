@@ -16,7 +16,7 @@ function ILuaStateEnv:evalLua(luaScript) end
 
 ---@public
 ---@return org.eu.smileyik.luajava.exception.Result 
-function ILuaStateEnv:callClosure(globalClosureName, params) end
+function ILuaStateEnv:callClosure(globalClosureName, ...) end
 
 ---@public
 ---@return org.eu.smileyik.luaInMinecraftBukkitII.luaState.luacage.ILuacage 
