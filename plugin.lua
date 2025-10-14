@@ -22,15 +22,19 @@ local function annotationRawCommand(diffs, pos, sender, command, label, args)
     }
 end
 
-local function annotationSimpleCommand(diffs, pos, sender, args)
+local function annotationSimpleCommand(diffs, pos, sender, args, isPlayer)
+    local t = "org.bukkit.command.CommandSender"
+    if isPlayer then 
+        t = "org.bukkit.entity.Player"
+    end
     diffs[#diffs+1] = {
         start  = pos,
         finish = pos - 1,
         text   = ([[
 
-        ---@param %s org.bukkit.command.CommandSender command sender
+        ---@param %s %s command sender
         ---@param %s string[] command args
-        ]]):format(sender, args),
+        ]]):format(sender, t, args),
     }
 end
 
@@ -86,6 +90,21 @@ function OnSetText(uri, text)
         end
     end
 
+    -- return luajava.bindClass
+    for localPos, typeName in text:gmatch '()return%s*luajava%.bindClass%s*%(%s*[\'"]([%w_.]+)[\'"]%s*%)' do
+        annotationType(diffs, {}, localPos, "1", typeName)
+    end
+
+    -- return luajava.createProxy
+    for localPos, typeName in text:gmatch '()return%s*luajava%.createProxy%s*%(%s*[\'"]([%w_.]+)[\'"]()' do
+        annotationType(diffs, {}, localPos, "1", typeName)
+    end
+
+    -- return luajava.newInstance
+    for localPos, typeName in text:gmatch '()return%s*luajava%.newInstance%s*%(%s*[\'"]([%w_.]+)[\'"]()' do
+        annotationType(diffs, {}, localPos, "1", typeName)
+    end
+
     ------------------- import start -------------------
 
     for localPos, varName, colonPos, typeName, finish in text:gmatch '()local%s+([%w_]+)()%s*=%s*import%s*[%(*%s*[\'"]([%w_.]+)[\'"]%s*%)*()' do
@@ -124,9 +143,11 @@ function OnSetText(uri, text)
 
     ------------------- command -------------------
     
+    local commandFunctionMap = {}
+
     --- ILuaCommandBuilder:handler
     for pos, sender, args in text:gmatch ':%s*command%s*%(%s*[\'"].+[\'"]%s*%).+:%s*handler%(%s*()function%s*%(%s*([%w_]+)%s*,%s*([%w_]+)%s*%)' do
-        annotationSimpleCommand(diffs, pos, sender, args)
+        annotationSimpleCommand(diffs, pos, sender, args, false)
     end
 
     --- match command like
@@ -134,7 +155,7 @@ function OnSetText(uri, text)
     --- --- command
     --- end
     for pos, sender, args in text:gmatch '()function%s*[%w_.]*%s*%(%s*([%w_]+)%s*,%s*([%w_]+)%s*%)%s*%-%-+%s*command%s' do
-        annotationSimpleCommand(diffs, pos, sender, args)
+        annotationSimpleCommand(diffs, pos, sender, args, false)
     end
 
     --- match command like
@@ -145,6 +166,14 @@ function OnSetText(uri, text)
         annotationRawCommand(diffs, pos, sender, command, label, args)
     end
 
+    --- match command like
+    --- function [function_name](sender, args)
+    --- --- command
+    --- end
+    for pos, sender, args in text:gmatch '()function%s*[%w_.]*%s*%(%s*([%w_]+)%s*,%s*([%w_]+)%s*%)%s*%-%-+%s*player%s+command%s' do
+        annotationSimpleCommand(diffs, pos, sender, args, true)
+    end
+
     --- registerRawCommand
     for pos, sender, command, label, args in text:gmatch ':registerRawCommand%(%s*[\'"].+[\'"]%s*,%s*()function%s*%(%s*([%w_]+)%s*,%s*([%w_]+)%s*,%s*([%w_]+)%s*,%s*([%w_]+)%s*%)' do
         annotationRawCommand(diffs, pos, sender, command, label, args)
@@ -152,12 +181,33 @@ function OnSetText(uri, text)
 
     --- command table
     for commandStart, command, commandEnd in text:gmatch '()command%s*=%s*[\'"]([%w_.]+)[\'"]%s*()' do
+        local argsPos = text:match("args%s*=%s*{()")
         local endPos = text:find("}", commandEnd)
+        if argsPos then 
+            endPos = text:find("}", endPos + 1)
+        end
+        
         if endPos then
-            local pos, sender, args = text:sub(commandEnd, endPos):match('handler%s*=%s*()function%s*%(%s*([%w_]+)%s*,%s*([%w_]+)%s*%)')
+            local t = text:sub(commandEnd, endPos)
+            local isPlayer = t:match('()needPlayer%s*=%s*true')
+            local pos, sender, args = t:match('handler%s*=%s*()function%s*%(%s*([%w_]+)%s*,%s*([%w_]+)%s*%)')
             if pos then
-                annotationSimpleCommand(diffs, pos + commandEnd - 1, sender, args)
+                annotationSimpleCommand(diffs, pos + commandEnd - 1, sender, args, isPlayer ~= nil)
+            else 
+                local commandFunctionName = (t.." "):match('handler%s*=%s*([%w_.]+)%s*')
+                print(t, commandFunctionName)
+                if commandFunctionName then
+                    commandFunctionMap[commandFunctionName] = {
+                        isPlayer = isPlayer ~= nil
+                    }
+                end
             end
+        end
+    end
+
+    for pos, name, sender, args in text:gmatch '()function%s*([%w_.]+)%s*%(%s*([%w_]+)%s*,%s*([%w_]+)%s*%)' do
+        if commandFunctionMap[name] then
+            annotationSimpleCommand(diffs, pos, sender, args, commandFunctionMap[name].isPlayer)
         end
     end
 
