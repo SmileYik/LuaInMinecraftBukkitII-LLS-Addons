@@ -2,46 +2,77 @@ local function annotationType(diffs, typeMap, localPos, varName, typeName)
     diffs[#diffs+1] = {
         start  = localPos,
         finish = localPos - 1,
-        text   = ('---@type %s\n'):format(typeName),
+        text   = ('\n---@type %s\n'):format(typeName),
     }
     typeMap[varName] = typeName
 end
 
-local function annotationTypeForNotLocal(diffs, typeMap, text, localPos, varName, typeName)
-    local trimmed_end = text:match("(%S+)%s*$")
-    if trimmed_end and #trimmed_end >= #"local" and "local" == string.sub(text, #trimmed_end - 5, #trimmed_end) then return end
-    if trimmed_end then
+local function annotationRawCommand(diffs, pos, sender, command, label, args)
     diffs[#diffs+1] = {
-        start  = localPos,
-        finish = localPos - 1,
-        text   = ('\n---@type %s\n'):format(typeName),
+        start  = pos,
+        finish = pos - 1,
+        text   = ([[
+
+        ---@param %s org.bukkit.command.CommandSender command sender
+        ---@param %s org.bukkit.command.Command command
+        ---@param %s string command label
+        ---@param %s string[] command args
+        ---@return boolean result you should return `true` or `false`
+        ]]):format(sender, command, label, args),
     }
 end
+
+local function annotationSimpleCommand(diffs, pos, sender, args)
     diffs[#diffs+1] = {
-        start  = localPos,
-        finish = localPos - 1,
-        text   = ('\n---@type %s\n'):format(typeName),
+        start  = pos,
+        finish = pos - 1,
+        text   = ([[
+
+        ---@param %s org.bukkit.command.CommandSender command sender
+        ---@param %s string[] command args
+        ]]):format(sender, args),
     }
-    typeMap[varName] = typeName
+end
+
+local function annotationEvent(diffs, pos, event, var, mark)
+    if mark == nil then mark = "mark" end
+    diffs[#diffs+1] = {
+        start  = pos,
+        finish = pos - 1,
+        text   = ([[
+        
+        ---%s
+        ---@param %s %s event instance
+        ]]):format(mark, var, event),
+    }
 end
 
 function OnSetText(uri, text)
+
+    for _ in text:gmatch '()%s*%-%-+@meta' do
+        return
+    end
+
     local diffs = {}
     local typeMap = {}
+    local placedLuajava = {}
 
     -- local var = luajava.bindClass
     for localPos, varName, colonPos, typeName, finish in text:gmatch '()local%s+([%w_]+)()%s*=%s*luajava%.bindClass%s*%(%s*[\'"]([%w_.]+)[\'"]%s*%)()' do
         annotationType(diffs, typeMap, localPos, varName, typeName)
+        placedLuajava[colonPos] = true
     end
 
     -- local var = luajava.newInstance
     for localPos, varName, colonPos, typeName, finish in text:gmatch '()local%s+([%w_]+)()%s*=%s*luajava%.newInstance%s*%(%s*[\'"]([%w_.]+)[\'"]()' do
         annotationType(diffs, typeMap, localPos, varName, typeName)
+        placedLuajava[colonPos] = true
     end
 
     -- local var = luajava.createProxy
     for localPos, varName, colonPos, typeName, finish in text:gmatch '()local%s+([%w_]+)()%s*=%s*luajava%.createProxy%s*%(%s*[\'"]([%w_.]+)[\'"]()' do
         annotationType(diffs, typeMap, localPos, varName, typeName)
+        placedLuajava[colonPos] = true
     end
 
     -- local var = luajava.new
@@ -49,71 +80,98 @@ function OnSetText(uri, text)
         if typeMap[otherVarName] then
             local typeName = typeMap[otherVarName]
             annotationType(diffs, typeMap, localPos, varName, typeName)
+            placedLuajava[colonPos] = true
         end
     end
 
     ------------------- table start -------------------
 
     -- table: var = luajava.bindClass
-    for _, localPos, varName, colonPos, typeName, finish in text:gmatch '([%g%s]*)()([%w_]+)()%s*=%s*luajava%.bindClass%s*%(%s*[\'"]([%w_.]+)[\'"]%s*%)()' do
-        annotationType(diffs, {}, localPos, varName, typeName)
+    for localPos, varName, colonPos, typeName, finish in text:gmatch '()([%w_]+)()%s*=%s*luajava%.bindClass%s*%(%s*[\'"]([%w_.]+)[\'"]%s*%)()' do
+        if not placedLuajava[colonPos] then
+            annotationType(diffs, {}, localPos, varName, typeName)
+        end
     end
 
     -- table: var = luajava.newInstance
-    for _, localPos, varName, colonPos, typeName, finish in text:gmatch '([%g%s]*)()([%w_]+)()%s*=%s*luajava%.newInstance%s*%(%s*[\'"]([%w_.]+)[\'"]()' do
-        annotationType(diffs, {}, localPos, varName, typeName)
+    for localPos, varName, colonPos, typeName, finish in text:gmatch '()([%w_]+)()%s*=%s*luajava%.newInstance%s*%(%s*[\'"]([%w_.]+)[\'"]()' do
+        if not placedLuajava[colonPos] then
+            annotationType(diffs, {}, localPos, varName, typeName)
+        end
     end
 
     -- table: var = luajava.createProxy
-    for _, localPos, varName, colonPos, typeName, finish in text:gmatch '([%g%s]*)()([%w_]+)()%s*=%s*luajava%.createProxy%s*%(%s*[\'"]([%w_.]+)[\'"]()' do
-        annotationType(diffs, {}, localPos, varName, typeName)
+    for localPos, varName, colonPos, typeName, finish in text:gmatch '()([%w_]+)()%s*=%s*luajava%.createProxy%s*%(%s*[\'"]([%w_.]+)[\'"]()' do
+        if not placedLuajava[colonPos] then
+            annotationType(diffs, {}, localPos, varName, typeName)
+        end
     end
 
     ------------------- command -------------------
     
     --- ILuaCommandBuilder:handler
-    for sender, args, pos in text:gmatch ':%s*command%s*%(%s*[\'"].+[\'"]%s*%).+:%s*handler%(%s*function%s*%(%s*([%w_]+)%s*,%s*([%w_]+)%s*%)()' do
-        diffs[#diffs+1] = {
-            start  = pos,
-            finish = pos - 1,
-            text   = ('\n---@type org.bukkit.command.CommandSender\n%s = %s\n---@type table\n%s = %s\n'):format(sender, sender, args, args),
-        }
+    for pos, sender, args in text:gmatch ':%s*command%s*%(%s*[\'"].+[\'"]%s*%).+:%s*handler%(%s*()function%s*%(%s*([%w_]+)%s*,%s*([%w_]+)%s*%)' do
+        annotationSimpleCommand(diffs, pos, sender, args)
+    end
+
+    --- match command like
+    --- function [function_name](sender, args)
+    --- --- command
+    --- end
+    for pos, sender, args in text:gmatch '()function%s*[%w_.]*%s*%(%s*([%w_]+)%s*,%s*([%w_]+)%s*%)%s*%-%-+%s*command%s' do
+        annotationSimpleCommand(diffs, pos, sender, args)
+    end
+
+    --- match command like
+    --- function [function_name](sender, command, label, args)
+    --- --- command
+    --- end
+    for pos, sender, command, label, args in text:gmatch '()function%s*[%w_.]*%s*%(%s*([%w_]+)%s*,%s*([%w_]+)%s*,%s*([%w_]+)%s*,%s*([%w_]+)%s*%)%s*%-%-+%s*command%s' do
+        annotationRawCommand(diffs, pos, sender, command, label, args)
     end
 
     --- registerRawCommand
-    for sender, command, label, args, pos in text:gmatch ':registerRawCommand%(%s*[\'"].+[\'"]%s*,%s*function%s*%(%s*([%w_]+)%s*,%s*([%w_]+)%s*,%s*([%w_]+)%s*,%s*([%w_]+)%s*%)()' do
-        diffs[#diffs+1] = {
-            start  = pos,
-            finish = pos - 1,
-            text   = ([[
-
-                ---@type org.bukkit.command.CommandSender
-                %s = %s
-                ---@type org.bukkit.command.Command
-                %s = %s
-                ---@type string
-                %s = %s
-                ---@type table
-                %s = %s
-
-            ]]):format(sender, sender, command, command, label, label, args, args),
-        }
+    for pos, sender, command, label, args in text:gmatch ':registerRawCommand%(%s*[\'"].+[\'"]%s*,%s*()function%s*%(%s*([%w_]+)%s*,%s*([%w_]+)%s*,%s*([%w_]+)%s*,%s*([%w_]+)%s*%)' do
+        annotationRawCommand(diffs, pos, sender, command, label, args)
     end
 
     ------------------- event -------------------
     
     --- luaBukkit.env:onEvent
-    for event, var, pos in text:gmatch ':onEvent%(%s*[\'"].+[\'"]%s*,%s*[\'"]([%w_.]+)[\'"]%s*,%s*function%s*%(%s*([%w_]+)%s*%)()' do
-        diffs[#diffs+1] = {
-            start  = pos,
-            finish = pos - 1,
-            text   = ([[
+    for event, pos, var in text:gmatch ':onEvent%(%s*[\'"][%w_.]+[\'"]%s*,%s*[\'"]([%w_.]+)[\'"]%s*,%s*()function%s*%(%s*([%w_]+)%s*%)' do
+        annotationEvent(diffs, pos, event, var, "by onEvent")
+    end
 
-                ---@type %s
-                %s = %s
+    --- event table
+    for eventStart, event, eventEnd in text:gmatch '()event%s*=%s*[\'"]([%w_.]+)[\'"]%s*()' do
+        local endPos = text:find("}", eventEnd)
+        if endPos then
+            local pos, var = text:sub(eventEnd, endPos):match('handler%s*=%s*()function%s*%(%s*([%w_]+)%s*%)')
+            if pos then
+                annotationEvent(diffs, pos + eventEnd - 1, event, var, "by table")
+            end
+        end
+    end
 
-            ]]):format(event, var, var),
-        }
+    --- manual mark event
+    --- format
+    --- function [function_name](param1)
+    --- --- event type
+    --- end
+    for pos, var, event in text:gmatch '()function%s*[%w_.]*%s*%(%s*([%w_]+)%s*%)%s*%-%-+%s*event%s+([%w_.]+)%s' do
+        annotationEvent(diffs, pos, event, var, "by comment")
+    end
+
+    for event, pos, var in text:gmatch ':subscribe%s*%(%s*[\'"]([%w_.]+)[\'"]%s*,%s*()function%s*%(%s*([%w_]+)%s*%)' do
+        annotationEvent(diffs, pos, event, var, "by subscribe 1")
+    end
+
+    for event, pos, var in text:gmatch ':subscribe%s*%(%s*[\'"]([%w_.]+)[\'"]%s*,[%w%s\'"]+,%s*()function%s*%(%s*([%w_]+)%s*%)' do
+        annotationEvent(diffs, pos, event, var, "by subscribe 2")
+    end
+
+    for event, pos, var in text:gmatch ':subscribe%s*%(%s*[\'"]([%w_.]+)[\'"]%s*,[%w%s\'"]+,[%w%s\'"]+,%s*()function%s*%(%s*([%w_]+)%s*%)' do
+        annotationEvent(diffs, pos, event, var, "by subscribe 3")
     end
 
     return diffs
