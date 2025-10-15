@@ -1,266 +1,219 @@
-local function annotationType(diffs, typeMap, localPos, varName, typeName)
-    diffs[#diffs+1] = {
-        start  = localPos,
-        finish = localPos - 1,
-        text   = ('---@type %s\n'):format(typeName),
+local parser = require 'parser'
+
+---@class InsertPoints
+---@field private points table<number, string>
+---@field private functionHooks table<string, function> hook function
+local InsertPoints = {}
+InsertPoints.__index = InsertPoints
+
+---@return InsertPoints
+function InsertPoints.new()
+    local instance = {
+        points = {},
+        functionHooks = {}
     }
-    typeMap[varName] = typeName
+    return setmetatable(instance, InsertPoints)
 end
 
-local function annotationRawCommand(diffs, pos, sender, command, label, args)
-    diffs[#diffs+1] = {
-        start  = pos,
-        finish = pos - 1,
-        text   = ([[
-
-        ---@param %s org.bukkit.command.CommandSender command sender
-        ---@param %s org.bukkit.command.Command command
-        ---@param %s string command label
-        ---@param %s string[] command args
-        ---@return boolean result you should return `true` or `false`
-        ]]):format(sender, command, label, args),
-    }
+---@param pos number
+---@param source string
+function InsertPoints:insert(pos, source)
+    self.points[pos] = source
 end
 
-local function annotationSimpleCommand(diffs, pos, sender, args, isPlayer)
-    local t = "org.bukkit.command.CommandSender"
-    if isPlayer then 
-        t = "org.bukkit.entity.Player"
+function InsertPoints:hookFunctionDefine(funcName, callback)
+    self.functionHooks[funcName] = callback
+end
+
+function InsertPoints:getSortedPos()
+    local sortedPositions = {}
+    for pos in pairs(self.points) do
+        sortedPositions[#sortedPositions + 1] = pos
     end
-    diffs[#diffs+1] = {
-        start  = pos,
-        finish = pos - 1,
-        text   = ([[
-
-        ---@param %s %s command sender
-        ---@param %s string[] command args
-        ]]):format(sender, t, args),
-    }
+    table.sort(sortedPositions)
+    return sortedPositions
 end
 
-local function annotationEvent(diffs, pos, event, var, mark)
-    if mark == nil then mark = "mark" end
-    diffs[#diffs+1] = {
-        start  = pos,
-        finish = pos - 1,
-        text   = ([[
-        
-        ---%s
-        ---@param %s %s event instance
-        ]]):format(mark, var, event),
-    }
+---
+---@param text string
+function InsertPoints:patch(text)
+    local flag = false
+    local lua = text
+    local poses = self:getSortedPos()
+    for i = #poses, 1, -1 do
+        local pos = poses[i]
+        local text = self.points[pos]
+        local head = lua:sub(1, pos)
+        local tail = lua:sub(pos + 1)
+        lua = head .. text .. tail
+        flag = true
+    end
+    return flag, lua
 end
+
+---
+---@return table diffs
+function InsertPoints:diffs()
+    local diffs = {}
+    for pos, text in pairs(self.points) do
+        diffs[#diffs + 1] = {
+            start  = pos + 1, 
+            finish = pos + 1,
+            text   = text,
+        }
+    end
+    return diffs
+end
+
+function InsertPoints:clear()
+    self.points = {}
+end
+
+---get source code range offset
+---@param state parser.state
+---@param source parser.object
+---@return boolean, number, number
+local function getOffsetRange(state, source)
+    if not state or not source then return false, nil, nil end
+    local p, q = parser.guide.getRange(source)
+    if not p or not q then return false, nil, nil end
+    return true, parser.guide.positionToOffset(state, p) + 1, parser.guide.positionToOffset(state, q)
+end
+
+---get source code
+---@param state parser.state
+---@param source parser.object
+---@return string|nil, number|nil, number|nil
+local function getCode(state, source)
+    local result, p, q = getOffsetRange(state, source)
+    if result then
+        return state.lua:sub(p, q), p, q
+    end
+    return nil
+end
+
+---get source code
+---@param state parser.state
+---@param source parser.object
+---@return string|nil, number|nil, number|nil
+local function getNoSpaceCode(state, source)
+    local code, p, q = getCode(state, source)
+    if code then return code:gsub("%s", ""), p, q end
+    return nil
+end
+
+---@param points InsertPoints
+---@param state parser.state
+---@param source parser.object
+local function luajavaGetTypeFromString(points, state, source)
+    local arg = parser.guide.getParam(source, 1)
+    if arg and parser.guide.isLiteral(arg) then 
+        local type = parser.guide.getLiteral(arg)
+        points:insert(parser.guide.positionToOffset(state, source.finish), "--[[@as " .. type .. "]]")
+        print("----", parser.guide.positionToOffset(state, source.finish), source.finish)
+    end
+end
+
+local callTable = {
+    ["luajava.bindClass"] = luajavaGetTypeFromString,
+    ["luajava.newInstance"] = luajavaGetTypeFromString,
+    ["luajava.createProxy"] = luajavaGetTypeFromString,
+    ["import"] = luajavaGetTypeFromString,
+}
+
+--- foreach every call
+---@param points InsertPoints
+---@param state parser.state
+---@param callSrc parser.object
+local function eachEveryCall(points, state, callSrc)
+    local handled = false
+    parser.guide.eachChild(callSrc, function (src)
+        local srcText = getNoSpaceCode(state, src)
+        if srcText and not handled and callTable[srcText] then
+            callTable[srcText](points, state, callSrc)
+            handled = true
+        end
+    end)
+end
+
+local tableHandlers = {
+    --- command table handler
+    command = {
+        match = function(points, state, src)
+            return src and "command" == parser.guide.getKeyName(src)
+        end,
+        handle = function(points, state, tableSrc, machedLineSrc)
+            parser.guide.eachChild(tableSrc, function (src)
+                if "handler" ~= parser.guide.getKeyName(src) then 
+                    return
+                end
+                parser.guide.eachSource(src, function(a) 
+                    print(a.type, getNoSpaceCode(state, a))
+                end)
+                local flag = false
+                parser.guide.eachSourceTypes(src, {"getlocal", "getglobal", "function"}, function(a) 
+                    
+                    print(a.type, getNoSpaceCode(state, a))
+                end)
+            end)
+        end
+    }
+}
+
+--- foreach every table
+---@param points InsertPoints
+---@param state parser.state
+---@param tableSrc parser.object
+local function eachEveryTable(points, state, tableSrc)
+    local handled = false
+    parser.guide.eachChild(tableSrc, function (src)
+        if handled then return end
+        for _, handler in pairs(tableHandlers) do
+            handled = (handler.match(points, state, src) and 
+                        handler.handle(points, state, tableSrc, src)) or false
+            if handled then break end
+        end
+    end)
+end
+
+-- ---@type table<string, InsertPoints>
+-- local files = {}
+-- ---@param  uri  string # The uri of file
+-- ---@param  ast  parser.object # The file ast
+-- ---@return parser.object? ast
+-- function OnTransformAst(uri, ast)
+--     print(2, uri)
+--     local state = ast.state --[[@as parser.state]]
+--     local points = files[uri] or InsertPoints:new()
+--     files[uri] = points
+--     points:clear()
+--     -- parser.guide.eachSource(ast, function(src) 
+--     --     -- print("@" .. src.type, "----", getCode(state, src))
+--     --     -- print("----", state.lua:sub(src.start, src.finish))
+--     --     -- print(parser.guide.getStartFinish)
+--     -- end)
+--     parser.guide.eachSourceType(ast, "call", function (src)
+--         eachEveryCall(points, state, src)
+--     end)
+-- end
 
 function OnSetText(uri, text)
+    local ast = parser.compile(text, "Lua").ast
+    if not ast then return end
+    local state = ast.state --[[@as parser.state]]
+    local points = InsertPoints:new()
 
-    for _ in text:gmatch '()%s*%-%-+@meta' do
-        return
-    end
+    parser.guide.eachSourceType(ast, "call", function (src)
+        eachEveryCall(points, state, src)
+    end)
+    parser.guide.eachSourceType(ast, "table", function (src)
+        eachEveryTable(points, state, src)
+    end)
 
-    local diffs = {}
-    local typeMap = {}
-    local placedLuajava = {}
+    -- parser.guide.eachSource(ast, function(src) 
+    --     print("@" .. src.type, "----", getNoSpaceCode(state, src))
+    -- end)
 
-    ------------------- luajava start -------------------
-
-    -- local var = luajava.bindClass
-    for localPos, varName, colonPos, typeName, finish in text:gmatch '()local%s+([%w_]+)()%s*=%s*luajava%.bindClass%s*%(%s*[\'"]([%w_.]+)[\'"]%s*%)()' do
-        annotationType(diffs, typeMap, localPos, varName, typeName)
-        placedLuajava[colonPos] = true
-    end
-
-    -- local var = luajava.newInstance
-    for localPos, varName, colonPos, typeName, finish in text:gmatch '()local%s+([%w_]+)()%s*=%s*luajava%.newInstance%s*%(%s*[\'"]([%w_.]+)[\'"]()' do
-        annotationType(diffs, typeMap, localPos, varName, typeName)
-        placedLuajava[colonPos] = true
-    end
-
-    -- local var = luajava.createProxy
-    for localPos, varName, colonPos, typeName, finish in text:gmatch '()local%s+([%w_]+)()%s*=%s*luajava%.createProxy%s*%(%s*[\'"]([%w_.]+)[\'"]()' do
-        annotationType(diffs, typeMap, localPos, varName, typeName)
-        placedLuajava[colonPos] = true
-    end
-
-    -- local var = luajava.new
-    for localPos, varName, colonPos, otherVarName, finish in text:gmatch '()local%s+([%w_]+)()%s*=%s*luajava%.new%s*%(%s*([%w_.]+)()' do
-        if typeMap[otherVarName] then
-            local typeName = typeMap[otherVarName]
-            annotationType(diffs, typeMap, localPos, varName, typeName)
-            placedLuajava[colonPos] = true
-        end
-    end
-
-    -- return luajava.bindClass
-    for localPos, typeName in text:gmatch '()return%s*luajava%.bindClass%s*%(%s*[\'"]([%w_.]+)[\'"]%s*%)' do
-        annotationType(diffs, {}, localPos, "1", typeName)
-    end
-
-    -- return luajava.createProxy
-    for localPos, typeName in text:gmatch '()return%s*luajava%.createProxy%s*%(%s*[\'"]([%w_.]+)[\'"]()' do
-        annotationType(diffs, {}, localPos, "1", typeName)
-    end
-
-    -- return luajava.newInstance
-    for localPos, typeName in text:gmatch '()return%s*luajava%.newInstance%s*%(%s*[\'"]([%w_.]+)[\'"]()' do
-        annotationType(diffs, {}, localPos, "1", typeName)
-    end
-
-    ------------------- import start -------------------
-
-    for localPos, varName, colonPos, typeName, finish in text:gmatch '()local%s+([%w_]+)()%s*=%s*import%s*[%(*%s*[\'"]([%w_.]+)[\'"]%s*%)*()' do
-        annotationType(diffs, typeMap, localPos, varName, typeName)
-        placedLuajava[colonPos] = true
-    end
-
-    for localPos, varName, colonPos, typeName, finish in text:gmatch '()([%w_]+)()%s*=%s*import%s*[%(*%s*[\'"]([%w_.]+)[\'"]%s*%)*()' do
-        if not placedLuajava[colonPos] then
-            annotationType(diffs, {}, localPos, varName, typeName)
-        end
-    end
-
-    ------------------- table start -------------------
-
-    -- table: var = luajava.bindClass
-    for localPos, varName, colonPos, typeName, finish in text:gmatch '()([%w_]+)()%s*=%s*luajava%.bindClass%s*%(%s*[\'"]([%w_.]+)[\'"]%s*%)()' do
-        if not placedLuajava[colonPos] then
-            annotationType(diffs, {}, localPos, varName, typeName)
-        end
-    end
-
-    -- table: var = luajava.newInstance
-    for localPos, varName, colonPos, typeName, finish in text:gmatch '()([%w_]+)()%s*=%s*luajava%.newInstance%s*%(%s*[\'"]([%w_.]+)[\'"]()' do
-        if not placedLuajava[colonPos] then
-            annotationType(diffs, {}, localPos, varName, typeName)
-        end
-    end
-
-    -- table: var = luajava.createProxy
-    for localPos, varName, colonPos, typeName, finish in text:gmatch '()([%w_]+)()%s*=%s*luajava%.createProxy%s*%(%s*[\'"]([%w_.]+)[\'"]()' do
-        if not placedLuajava[colonPos] then
-            annotationType(diffs, {}, localPos, varName, typeName)
-        end
-    end
-
-    ------------------- command -------------------
-    
-    local commandFunctionMap = {}
-
-    --- ILuaCommandBuilder:handler
-    for pos, sender, args in text:gmatch ':%s*command%s*%(%s*[\'"].+[\'"]%s*%).+:%s*handler%(%s*()function%s*%(%s*([%w_]+)%s*,%s*([%w_]+)%s*%)' do
-        annotationSimpleCommand(diffs, pos, sender, args, false)
-    end
-
-    --- match command like
-    --- function [function_name](sender, args)
-    --- --- command
-    --- end
-    for pos, sender, args in text:gmatch '()function%s*[%w_.]*%s*%(%s*([%w_]+)%s*,%s*([%w_]+)%s*%)%s*%-%-+%s*command%s' do
-        annotationSimpleCommand(diffs, pos, sender, args, false)
-    end
-
-    --- match command like
-    --- function [function_name](sender, command, label, args)
-    --- --- command
-    --- end
-    for pos, sender, command, label, args in text:gmatch '()function%s*[%w_.]*%s*%(%s*([%w_]+)%s*,%s*([%w_]+)%s*,%s*([%w_]+)%s*,%s*([%w_]+)%s*%)%s*%-%-+%s*command%s' do
-        annotationRawCommand(diffs, pos, sender, command, label, args)
-    end
-
-    --- match command like
-    --- function [function_name](sender, args)
-    --- --- command
-    --- end
-    for pos, sender, args in text:gmatch '()function%s*[%w_.]*%s*%(%s*([%w_]+)%s*,%s*([%w_]+)%s*%)%s*%-%-+%s*player%s+command%s' do
-        annotationSimpleCommand(diffs, pos, sender, args, true)
-    end
-
-    --- registerRawCommand
-    for pos, sender, command, label, args in text:gmatch ':registerRawCommand%(%s*[\'"].+[\'"]%s*,%s*()function%s*%(%s*([%w_]+)%s*,%s*([%w_]+)%s*,%s*([%w_]+)%s*,%s*([%w_]+)%s*%)' do
-        annotationRawCommand(diffs, pos, sender, command, label, args)
-    end
-
-    --- command table
-    for commandStart, command, commandEnd in text:gmatch '()command%s*=%s*[\'"]([%w_.]+)[\'"]%s*()' do
-        local argsPos = text:match("args%s*=%s*{()")
-        local endPos = text:find("}", commandEnd)
-        if argsPos then 
-            endPos = text:find("}", endPos + 1)
-        end
-        
-        if endPos then
-            local t = text:sub(commandEnd, endPos)
-            local isPlayer = t:match('()needPlayer%s*=%s*true')
-            local pos, sender, args = t:match('handler%s*=%s*()function%s*%(%s*([%w_]+)%s*,%s*([%w_]+)%s*%)')
-            if pos then
-                annotationSimpleCommand(diffs, pos + commandEnd - 1, sender, args, isPlayer ~= nil)
-            else 
-                local commandFunctionName = (t.." "):match('handler%s*=%s*([%w_.]+)%s*')
-                print(t, commandFunctionName)
-                if commandFunctionName then
-                    commandFunctionMap[commandFunctionName] = {
-                        isPlayer = isPlayer ~= nil
-                    }
-                end
-            end
-        end
-    end
-
-    for pos, name, sender, args in text:gmatch '()function%s*([%w_.]+)%s*%(%s*([%w_]+)%s*,%s*([%w_]+)%s*%)' do
-        if commandFunctionMap[name] then
-            annotationSimpleCommand(diffs, pos, sender, args, commandFunctionMap[name].isPlayer)
-        end
-    end
-
-    ------------------- event -------------------
-
-    local placedEvent = {}
-
-    --- manual mark event
-    --- format
-    --- function [function_name](param1)
-    --- --- event type
-    --- end
-    for pos, var, event in text:gmatch '()function%s*[%w_.]*%s*%(%s*([%w_]+)%s*%)%s*%-%-+%s*event%s+([%w_.]+)%s' do
-        annotationEvent(diffs, pos, event, var, "by comment")
-        placedEvent[pos] = true
-    end
-
-    --- luaBukkit.env:onEvent
-    for event, pos, var in text:gmatch ':onEvent%(%s*[\'"][%w_.]+[\'"]%s*,%s*[\'"]([%w_.]+)[\'"]%s*,%s*()function%s*%(%s*([%w_]+)%s*%)' do
-        if not placedEvent[pos] then
-            annotationEvent(diffs, pos, event, var, "by onEvent")
-        end
-    end
-
-    --- event table
-    for eventStart, event, eventEnd in text:gmatch '()event%s*=%s*[\'"]([%w_.]+)[\'"]%s*()' do
-        local endPos = text:find("}", eventEnd)
-        if endPos then
-            local pos, var = text:sub(eventEnd, endPos):match('handler%s*=%s*()function%s*%(%s*([%w_]+)%s*%)')
-            if pos and not placedEvent[pos + eventEnd - 1] then
-                annotationEvent(diffs, pos + eventEnd - 1, event, var, "by table")
-            end
-        end
-    end
-
-    --- subscribe method
-    for event, pos, var in text:gmatch ':subscribe%s*%(%s*[\'"]([%w_.]+)[\'"]%s*,%s*()function%s*%(%s*([%w_]+)%s*%)' do
-        if not placedEvent[pos] then
-            annotationEvent(diffs, pos, event, var, "by subscribe 1")
-        end
-    end
-
-    for event, pos, var in text:gmatch ':subscribe%s*%(%s*[\'"]([%w_.]+)[\'"]%s*,[%w%s\'"]+,%s*()function%s*%(%s*([%w_]+)%s*%)' do
-        if not placedEvent[pos] then
-            annotationEvent(diffs, pos, event, var, "by subscribe 2")
-        end
-    end
-
-    for event, pos, var in text:gmatch ':subscribe%s*%(%s*[\'"]([%w_.]+)[\'"]%s*,[%w%s\'"]+,[%w%s\'"]+,%s*()function%s*%(%s*([%w_]+)%s*%)' do
-        if not placedEvent[pos] then
-            annotationEvent(diffs, pos, event, var, "by subscribe 3")
-        end
-    end
-
-    return diffs
+    local diff = points:diffs()
+    if #diff > 0 then return diff end
 end
