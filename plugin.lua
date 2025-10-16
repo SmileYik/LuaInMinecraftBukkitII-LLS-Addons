@@ -1,8 +1,17 @@
 local parser = require 'parser'
 
+---@class FunctionHandler
+---@field offset number code offset
+---@field handle function handle method
+---@field data table the data
+---@field type string handler type
+local FunctionHandler = {}
+
+local tableHandlers = {}
+
 ---@class InsertPoints
 ---@field private points table<number, string>
----@field private functionHooks table<string, function> hook function
+---@field private functionHooks table<string, FunctionHandler> hook function0
 local InsertPoints = {}
 InsertPoints.__index = InsertPoints
 
@@ -10,49 +19,40 @@ InsertPoints.__index = InsertPoints
 function InsertPoints.new()
     local instance = {
         points = {},
-        functionHooks = {}
+        functionHooks = {},
+        globals = {},
+        headBlock = nil
     }
     return setmetatable(instance, InsertPoints)
 end
 
+--- insert source at target point(offset)
 ---@param pos number
 ---@param source string
 function InsertPoints:insert(pos, source)
     self.points[pos] = source
 end
 
-function InsertPoints:hookFunctionDefine(funcName, t)
-    self.functionHooks[funcName] = t
-end
-
-function InsertPoints:getFunctionHook(funcName)
-    return self.functionHooks[funcName]
-end
-
-function InsertPoints:getSortedPos()
-    local sortedPositions = {}
-    for pos in pairs(self.points) do
-        sortedPositions[#sortedPositions + 1] = pos
+---hook function defined
+---@param funcName string?
+---@param handler FunctionHandler
+function InsertPoints:hookFunctionDefine(funcName, handler)
+    if funcName then
+        self.functionHooks[funcName] = handler
     end
-    table.sort(sortedPositions)
-    return sortedPositions
 end
 
----
----@param text string
-function InsertPoints:patch(text)
-    local flag = false
-    local lua = text
-    local poses = self:getSortedPos()
-    for i = #poses, 1, -1 do
-        local pos = poses[i]
-        local text = self.points[pos]
-        local head = lua:sub(1, pos)
-        local tail = lua:sub(pos + 1)
-        lua = head .. text .. tail
-        flag = true
+---get real function position
+---@return table<parser.object, FunctionHandler> map setvalue source to handler
+function InsertPoints:getFunctionHooks()
+    local result = {}
+    for funcName, handler in pairs(self.functionHooks) do
+        local setVar = self:findVar(funcName, handler.offset)
+        if setVar then
+            result[setVar] = handler
+        end
     end
-    return flag, lua
+    return result
 end
 
 ---@param lua string lua source
@@ -69,8 +69,136 @@ function InsertPoints:diffs(lua)
     return diffs
 end
 
-function InsertPoints:clear()
-    self.points = {}
+---scan ast block
+---@param state parser.state
+---@param ast parser.object
+function InsertPoints:scanBlock(state, ast)
+    local globals = {}
+    local tail = nil
+    if ast.finish then tail = parser.guide.offsetToPosition(state, ast.finish) end
+    local head = {
+        offset = parser.guide.offsetToPosition(state, ast.start),
+        tail = tail,
+        src = ast,
+        locals = {},
+        children = {}
+    }
+
+    ---@param src parser.object
+    local function foreach (src, node) 
+        parser.guide.eachChild(src, function (child)
+            if not child then return end
+            if parser.guide.blockTypes[child.type] then
+                local tail = nil
+                if ast.finish then tail = parser.guide.offsetToPosition(state, ast.finish) end
+                local t = {
+                    offset = parser.guide.offsetToPosition(state, child.start),
+                    tail = tail,
+                    src = child,
+                    locals = {},
+                    children = {}
+                }
+                table.insert(node.children, t)
+                foreach(child, t)
+            elseif child.type == "local" or child.type == "setlocal" then
+                local var = parser.guide.getKeyName(child)
+                if var then
+                    node.locals[var] = node.locals[var] or {}
+                    table.insert(node.locals[var], {
+                        offset = parser.guide.offsetToPosition(state, child.start),
+                        src = child
+                    })
+                end
+            elseif child.type == "setglobal" then
+                local var = parser.guide.getKeyName(child)
+                if var then
+                    globals[var] = globals[var] or {}
+                    table.insert(globals[var], {
+                        offset = parser.guide.offsetToPosition(state, child.start),
+                        src = child
+                    })
+                end
+            end
+        end)      
+    end
+    foreach(ast, head)
+    return head, globals
+end
+
+---analyze block
+---@param state parser.state
+---@param ast parser.object
+function InsertPoints:analyze(state, ast)
+    self.headBlock, self.globals = self:scanBlock(state, ast)
+end
+
+---find local variable
+---@param name string
+---@param offset? number
+---@return parser.object?, number
+function InsertPoints:findLocalVar(name, offset)
+    offset = offset or 0
+    local mostNear = -1
+    local result = nil
+    local function search(node)
+        for _, var in ipairs(node.locals[name] or {}) do
+            local sub = offset - var.offset
+            if sub < 0 then sub = -sub end
+            if mostNear == -1 or (sub > 0 and sub < mostNear) then
+                result = var.src
+                mostNear = sub
+            end
+        end
+        
+        for i = #node, 1, -1 do
+            local child = node.children[i]
+            if child.offset <= offset and (child.tail or offset) >= offset then
+                search(child)
+                return
+            end
+        end
+    end
+    search(self.headBlock)
+    return result, mostNear
+end
+
+---find global variable
+---@param name string
+---@param offset? number
+---@return parser.object?, number
+function InsertPoints:findGlobalVar(name, offset)
+    offset = offset or 0
+    local mostNear = -1
+    local result = nil
+    for _, var in ipairs(self.globals[name] or {}) do
+        local sub = offset - var.offset
+        if sub < 0 then sub = -sub end
+        if mostNear == -1 or (sub > 0 and sub < mostNear) then
+            result = var.src
+            mostNear = sub
+        end
+    end
+    return result, mostNear
+end
+
+
+---find variable
+---@param name string
+---@param offset? number
+---@return parser.object?
+function InsertPoints:findVar(name, offset)
+    offset = offset or 0
+    local result1, near1 = self:findGlobalVar(name, offset)
+    local result2, near2 = self:findLocalVar(name, offset)
+    if near1 == -1 then
+        return result2
+    elseif near2 == -1 then
+        return result1
+    elseif near1 < near2 then
+        return result1
+    else
+        return result2
+    end
 end
 
 ---get source code range offset
@@ -153,16 +281,49 @@ end
 local function getDefinedFunctionParams(state, funcSource)
     local params = {}
     if funcSource then
-        parser.guide.eachSourceType(funcSource, "funcargs", function(src)
-            parser.guide.eachChild(src, function (child)
-                local code = getNoSpaceCode(state, child)
-                if code and code ~= "" then
-                    table.insert(params, code)
+        if funcSource.type ~= "function" then
+            parser.guide.eachChild(funcSource, function (src)
+                if funcSource.type ~= "function" and src and src.type == "function" then
+                    funcSource = src
                 end
             end)
+        end
+        parser.guide.eachChild(funcSource, function (src)
+            if src and src.type == "funcargs" then
+                parser.guide.eachChild(src, function (child)
+                    local code = getNoSpaceCode(state, child)
+                    if code and code ~= "" then
+                        table.insert(params, code)
+                    end
+                end)
+            end
         end)
     end
     return params
+end
+
+--- find real defined var
+---@param points InsertPoints
+---@param state parser.state
+---@param varSrc parser.object
+local function getRealDefinedVar(points, state, varSrc)
+    local targetSrc = nil
+    parser.guide.eachChild(varSrc, function(src) 
+        if not targetSrc and src and (src.type == "getlocal" or src.type == "getglobal") then
+            targetSrc = src
+        end
+    end)
+    if targetSrc then
+        local varName = parser.guide.getKeyName(targetSrc)
+        if varName then
+            local offset = parser.guide.positionToOffset(state, varSrc.start)
+            local result = points:findVar(varName, offset)
+            if result then
+                return getRealDefinedVar(points, state, result)
+            end
+        end
+    end
+    return varSrc
 end
 
 ---@param state parser.state
@@ -189,8 +350,133 @@ local function luajavaGetTypeFromString(points, state, source)
     if arg and parser.guide.isLiteral(arg) then
         local type = parser.guide.getLiteral(arg)
         points:insert(parser.guide.positionToOffset(state, source.finish), "--[[@as " .. type .. "]]")
-        -- print("----", parser.guide.positionToOffset(state, source.finish), source.finish, getCode(state, source))
     end
+end
+
+---@param points InsertPoints
+---@param state parser.state
+---@param funcSource parser.object
+---@param data table<string, any>
+local function hookBukkitEvent(points, state, funcSource, data)
+    local params = getDefinedFunctionParams(state, funcSource)
+    if #params ~= 1 then return end
+    local eventType = data.event or "any"
+    points:insert(
+        parser.guide.positionToOffset(state, funcSource.start),
+        ("\n---@param %s %s event instance\n"):format(params[1], eventType)
+    )
+end
+
+---@param points InsertPoints
+---@param state parser.state
+---@param source parser.object the source include function or variable
+local function handleBukkitEvent(points, state, source, data)
+    local sources = {
+        ["function"] = source.type == 'function' and source,
+        ["getlocal"] = source.type == 'getlocal' and source,
+        ["getglobal"] = source.type == 'getglobal' and source,
+    }
+    parser.guide.eachChild(source, function (src)
+        if src and not sources[src.type] then
+            sources[src.type] = src
+        end
+    end)
+
+    if sources["function"] then
+        hookBukkitEvent(points, state, source, data)
+        return true
+    end
+
+    local child = sources["getlocal"] or sources["getglobal"] or nil
+    if child then
+        local targetSource = getTableValueSource(state, source) or child
+        points:hookFunctionDefine(getCode(state, targetSource), {
+            offset = parser.guide.positionToOffset(state, child.start),
+            handle = hookBukkitEvent,
+            data = data,
+            type = "table-event"
+        })
+        return true
+    end
+
+    return false
+end
+
+---@param points InsertPoints
+---@param state parser.state
+---@param funcSource parser.object
+---@param data table<string, any>
+local function hookBukkitCommandSimple(points, state, funcSource, data)
+    local params = getDefinedFunctionParams(state, funcSource)
+    if #params ~= 2 then return end
+    local senderType = "org.bukkit.server.CommandSender"
+    if data and data.isPlayer then
+        senderType = "org.bukkit.entity.Player"
+    end
+    points:insert(
+        parser.guide.positionToOffset(state, funcSource.start), 
+        ("\n--- command %s\n---@param %s %s command sender\n---@param %s string[] args\n"):format(data.command or "", params[1], senderType, params[2])
+    )
+end
+
+---@param points InsertPoints
+---@param state parser.state
+---@param funcSource parser.object
+---@param data table<string, any>
+local function hookBukkitCommandRaw(points, state, funcSource, data)
+    local params = getDefinedFunctionParams(state, funcSource)
+    if #params ~= 4 then return end
+    local senderType = "org.bukkit.server.CommandSender"
+    if data and data.isPlayer then
+        senderType = "org.bukkit.entity.Player"
+    end
+    points:insert(
+        parser.guide.positionToOffset(state, funcSource.start),
+        ([[
+--- command %s
+---@param %s %s command sender
+---@param %s org.bukkit.command.Command command instance
+---@param %s string command label
+---@param %s string[] command args
+]]):format(data.command or "", params[1], senderType, params[2], params[3], params[4])
+    )
+end
+
+---@param points InsertPoints
+---@param state parser.state
+---@param source parser.object the source include function or variable
+---@param data table
+---@param handler function?
+local function handleBukkitCommand(points, state, source, data, handler)
+    handler = handler or hookBukkitCommandSimple
+    local sources = {
+        ["function"] = source.type == 'function' and source,
+        ["getlocal"] = source.type == 'getlocal' and source,
+        ["getglobal"] = source.type == 'getglobal' and source,
+    }
+    parser.guide.eachChild(source, function (src)
+        if src and not sources[src.type] then
+            sources[src.type] = src
+        end
+    end)
+
+    if sources["function"] then
+        handler(points, state, source, data)
+        return true
+    end
+
+    local child = sources["getlocal"] or sources["getglobal"] or nil
+    if child then
+        local target = getTableValueSource(state, source) or source
+        points:hookFunctionDefine(getCode(state, target), {
+            offset = parser.guide.positionToOffset(state, child.start),
+            handle = handler,
+            data = data,
+            type = "table-command"
+        })
+        return true
+    end
+    return false
 end
 
 local callTable = {
@@ -198,13 +484,70 @@ local callTable = {
     ["luajava.newInstance"] = luajavaGetTypeFromString,
     ["luajava.createProxy"] = luajavaGetTypeFromString,
     ["import"] = luajavaGetTypeFromString,
+
+    ---@param points InsertPoints
+    ---@param state parser.state
+    ---@param source parser.object
+    ["luaBukkit.env:onEvent"] = function (points, state, source)
+        local eventSrc = parser.guide.getParam(source, 3)
+        local funcSrc = parser.guide.getParam(source, 4)
+        if eventSrc and funcSrc and parser.guide.isLiteral(eventSrc) then
+            local event = parser.guide.getLiteral(eventSrc)
+            handleBukkitEvent(points, state, funcSrc, {
+                event = event
+            })
+        end
+    end,
+
+    ---@param points InsertPoints
+    ---@param state parser.state
+    ---@param source parser.object
+    ["luaBukkit.env:registerRawCommand"] = function (points, state, source)
+        local commandSrc = parser.guide.getParam(source, 2)
+        local funcSrc = parser.guide.getParam(source, 3)
+        if commandSrc and funcSrc and parser.guide.isLiteral(commandSrc) then
+            local command = parser.guide.getLiteral(commandSrc)
+            handleBukkitCommand(points, state, funcSrc, {
+                command = command
+            }, hookBukkitCommandRaw)
+        end
+    end
 }
 
---- foreach every call
+---luajava.new
+---@param points InsertPoints
+---@param state parser.state
+---@param source parser.object
+callTable["luajava.new"] = function (points, state, source)
+    local arg = parser.guide.getParam(source, 1)
+    if arg then
+        local varName = parser.guide.getKeyName(arg)
+        if varName then
+            local var = points:findVar(varName, parser.guide.positionToOffset(state, source.finish))
+            if var then
+                var = getRealDefinedVar(points, state, var)
+                parser.guide.eachSourceType(var, "call", function (callSrc)
+                    parser.guide.eachChild(callSrc, function (src)
+                        local srcText = getNoSpaceCode(state, src)
+                        if callTable[srcText] then
+                            local t = parser.guide.getParam(callSrc, 1)
+                            if t and parser.guide.isLiteral(t) then
+                                local type = parser.guide.getLiteral(t)
+                                points:insert(parser.guide.positionToOffset(state, source.finish), "--[[@as " .. type .. "]]")
+                            end
+                        end
+                    end)
+                end)
+            end
+        end
+    end
+end
+
+--- foreach all function call
 ---@param points InsertPoints
 ---@param state parser.state
 ---@param callSrc parser.object
-local function eachEveryCall(points, state, callSrc)
+local function eachCall(points, state, callSrc)
     local handled = false
     parser.guide.eachChild(callSrc, function (src)
         local srcText = getNoSpaceCode(state, src)
@@ -214,8 +557,6 @@ local function eachEveryCall(points, state, callSrc)
         end
     end)
 end
-
-local tableHandlers = {}
 
 tableHandlers.command = {
     match = function(points, state, src)
@@ -228,45 +569,13 @@ tableHandlers.command = {
     handle = function(points, state, tableSrc, machedLineSrc)
         local handlerEntry = getTableEntrySource(tableSrc, "handler")
         if not handlerEntry then return false end
-        
-        local result = false
         local data = {
-            isPlayer = "true" == getTableValue(state, tableSrc, "isPlayer", getNoSpaceCode),
+            isPlayer = "true" == getTableValue(state, tableSrc, "needPlayer", getNoSpaceCode),
             command = getTableValue(state, tableSrc, "command")
         }
-
-        parser.guide.eachSourceTypes(handlerEntry, {"getlocal", "getglobal", "function"}, function (child)
-            if result then return end
-            if child.type == "function" then
-                tableHandlers.command.handleFunction(points, state, handlerEntry, data)
-            else
-                points:hookFunctionDefine(getCode(state, getTableValueSource(state, handlerEntry)), {
-                    handle = tableHandlers.command.handleFunction,
-                    data = data
-                })
-            end
-            result = true
-        end)
-
-        return result
+        return handleBukkitCommand(points, state, handlerEntry, data, hookBukkitCommandSimple)
     end,
-
-    ---@param points InsertPoints
-    ---@param state parser.state
-    ---@param funcSource parser.object
-    ---@param data table<string, any>
-    handleFunction = function (points, state, funcSource, data)
-        local params = getDefinedFunctionParams(state, funcSource)
-        if #params ~= 2 then return end
-        local senderType = "org.bukkit.server.CommandSender"
-        if data and data.isPlayer then
-            senderType = "org.bukkit.entity.Player"
-        end
-        points:insert(
-            parser.guide.positionToOffset(state, funcSource.start), 
-            ("\n--- command %s\n---@param %s %s command sender\n---@param %s string[]\n"):format(data.command or "", params[1], senderType, params[2])
-        )
-    end
+    handleFunction = hookBukkitCommandSimple
 }
 
 tableHandlers.event = {
@@ -283,43 +592,16 @@ tableHandlers.event = {
         
         local result = false
         local data = { event = getTableValue(state, tableSrc, "event") }
-
-        parser.guide.eachSourceTypes(handlerEntry, {"getlocal", "getglobal", "function"}, function (child)
-            if result then return end
-            if child.type == "function" then
-                tableHandlers.event.handleFunction(points, state, handlerEntry, data)
-            else
-                points:hookFunctionDefine(getCode(state, getTableValueSource(state, handlerEntry)), {
-                    handle = tableHandlers.event.handleFunction,
-                    data = data
-                })
-            end
-            result = true
-        end)
-
-        return result
+        return handleBukkitEvent(points, state, handlerEntry, data)
     end,
-
-    ---@param points InsertPoints
-    ---@param state parser.state
-    ---@param funcSource parser.object
-    ---@param data table<string, any>
-    handleFunction = function (points, state, funcSource, data)
-        local params = getDefinedFunctionParams(state, funcSource)
-        if #params ~= 1 then return end
-        local eventType = data.event or "any"
-        points:insert(
-            parser.guide.positionToOffset(state, funcSource.start), 
-            ("\n---@param %s %s event instance\n"):format(params[1], eventType)
-        )
-    end
+    handleFunction = hookBukkitEvent
 }
 
 --- foreach every table
 ---@param points InsertPoints
 ---@param state parser.state
 ---@param tableSrc parser.object
-local function eachEveryTable(points, state, tableSrc)
+local function eachTable(points, state, tableSrc)
     local handled = false
     parser.guide.eachChild(tableSrc, function (src)
         if handled then return end
@@ -335,36 +617,22 @@ end
 ---@param points InsertPoints
 ---@param state parser.state
 ---@param setVarSrc parser.object
-local function handleSetVarFunction(points, state, setVarSrc)
+---@param t FunctionHandler
+local function handleSetVarFunction(points, state, setVarSrc, t)
+    setVarSrc = getRealDefinedVar(points, state, setVarSrc)
     local func = nil
-    parser.guide.eachSourceType(setVarSrc, "function", function (src)
-        if func then return end
+    parser.guide.eachChild(setVarSrc, function (src)
+        print(src and src.type, getNoSpaceCode(state, src))
+        if func or not src or src.type ~= "function" then return end
         func = src
     end)
     if not func then return end
-    local code = getNoSpaceCode(state, setVarSrc) or ""
-    -- local	functionaaaa()end	7	26
-    -- setglobal	anc=function()end	29	48
-    local name = nil
-    if code:sub(1, 8) == "function" then
-        name = code:match("function([%w_]+)%(")
-    else
-        name = code:match("^([%w_]+)=")
-    end
-    if name then
-        local t = points:getFunctionHook(name)
-        if t and t.handle and type(t.handle) == 'function' then
-            t.handle(points, state, func, t.data)
-        end
-    end
-end
 
---- foreach every function
----@param points InsertPoints
----@param state parser.state
----@param setVarSrc parser.object
-local function eachEverySetVar(points, state, setVarSrc)
-    handleSetVarFunction(points, state, setVarSrc)
+    -- has function
+    if t and t.handle and type(t.handle) == 'function' then
+        print("patch")
+        t.handle(points, state, func, t.data)
+    end
 end
 
 function OnSetText(uri, text)
@@ -374,24 +642,19 @@ function OnSetText(uri, text)
     local state = ast.state --[[@as parser.state]]
     local points = InsertPoints:new()
 
+    points:analyze(state, ast)
     parser.guide.eachSourceType(ast, "call", function (src)
         if not src then return end
-        eachEveryCall(points, state, src)
+        eachCall(points, state, src)
     end)
     parser.guide.eachSourceType(ast, "table", function (src)
         if not src then return end
-        eachEveryTable(points, state, src)
-    end)
-    parser.guide.eachSourceTypes(ast, {"setglobal", "local"}, function (src)
-        if not src then return end
-        eachEverySetVar(points, state, src)
+        eachTable(points, state, src)
     end)
 
-    -- parser.guide.eachSource(ast, function(src)
-    --     if not src then return end
-    --     print("@" .. src.type, "----", getNoSpaceCode(state, src))
-    -- end)
-
-    local diff = points:diffs(text)
-    if #diff > 0 then return diff end
+    for setVar, t in pairs(points:getFunctionHooks()) do
+        handleSetVarFunction(points, state, setVar, t)
+    end
+    
+    return points:diffs(text)
 end
