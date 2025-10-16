@@ -20,6 +20,28 @@ function ILuaEnv:unregisterEventListener(name) end
 ---@return org.eu.smileyik.luaInMinecraftBukkitII.api.lua.luaState.event.ILuaEventListenerBuilder 事件监听构造器.
 function ILuaEnv:listenerBuilder() end
 
+---一个简易的语法糖用于快速监听事件
+---@public
+---@param id string 事件ID
+---@param event string 要监听的事件全类名
+---@param luaCallable function 事件处理器
+---@return nil 
+function ILuaEnv:onEvent(id, event, luaCallable) end
+
+---一个简易的语法糖用于快速监听事件, 传入LuaTable类型, 并且必须包含<code>event</code>和<code>handler</code>字段.<code>event</code>字段为文本类型, 是要订阅的事件的全类名.<code>handler</code>字段为Lua闭包, 并且包含一个形参.
+---@public
+---@param id string 事件ID, 可以后续用来注销事件
+---@param event table 事件实体
+---@return nil 
+function ILuaEnv:onEvent(id, event) end
+
+---一个简易的语法糖用于快速监听事件, 与 onEvent 类似, 不过接收的是数组.
+---@public
+---@param id string 事件ID, 可以后续用来注销事件
+---@param ... table|table[] 事件实体数组.
+---@return nil 
+function ILuaEnv:onEvents(id, ...) end
+
 ---获取指令类构造器.
 ---@public
 ---@return org.eu.smileyik.luaInMinecraftBukkitII.api.lua.luaState.command.ILuaCommandClassBuilder 指令类构造器.
@@ -31,6 +53,13 @@ function ILuaEnv:commandClassBuilder() end
 ---@param ... java.lang.Class|java.lang.Class[] 指令类型.
 ---@return org.eu.smileyik.luajava.exception.Result 注册结果.
 function ILuaEnv:registerCommand(rootCommand, ...) end
+
+---注册一个原始指令, 该指令与 Bukkit 原始指令一致.
+---@public
+---@param command string 指令名称
+---@param callable function 回调闭包, 指令触发时, 将会传输给闭包形参顺序乳如下: sender, command, label, args, 并且该闭包需要返回 true/false
+---@return nil 
+function ILuaEnv:registerRawCommand(command, callable) end
 
 ---注册指令
 ---@public

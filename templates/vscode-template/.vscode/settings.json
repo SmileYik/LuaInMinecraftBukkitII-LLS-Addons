@@ -1,0 +1,6 @@
+{
+    "Lua.runtime.plugin": "/path/to/LuaInMinecraftBukkitII-LLS-Addon/plugin.lua",
+    "Lua.workspace.library": [
+        "/path/to/LuaInMinecraftBukkitII-LLS-Addon/"
+    ]
+}

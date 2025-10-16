@@ -409,7 +409,7 @@ end
 local function hookBukkitCommandSimple(points, state, funcSource, data)
     local params = getDefinedFunctionParams(state, funcSource)
     if #params ~= 2 then return end
-    local senderType = "org.bukkit.server.CommandSender"
+    local senderType = "org.bukkit.command.CommandSender"
     if data and data.isPlayer then
         senderType = "org.bukkit.entity.Player"
     end
@@ -426,7 +426,7 @@ end
 local function hookBukkitCommandRaw(points, state, funcSource, data)
     local params = getDefinedFunctionParams(state, funcSource)
     if #params ~= 4 then return end
-    local senderType = "org.bukkit.server.CommandSender"
+    local senderType = "org.bukkit.command.CommandSender"
     if data and data.isPlayer then
         senderType = "org.bukkit.entity.Player"
     end
@@ -438,6 +438,7 @@ local function hookBukkitCommandRaw(points, state, funcSource, data)
 ---@param %s org.bukkit.command.Command command instance
 ---@param %s string command label
 ---@param %s string[] command args
+---@return boolean
 ]]):format(data.command or "", params[1], senderType, params[2], params[3], params[4])
     )
 end
@@ -622,7 +623,6 @@ local function handleSetVarFunction(points, state, setVarSrc, t)
     setVarSrc = getRealDefinedVar(points, state, setVarSrc)
     local func = nil
     parser.guide.eachChild(setVarSrc, function (src)
-        print(src and src.type, getNoSpaceCode(state, src))
         if func or not src or src.type ~= "function" then return end
         func = src
     end)
@@ -630,7 +630,6 @@ local function handleSetVarFunction(points, state, setVarSrc, t)
 
     -- has function
     if t and t.handle and type(t.handle) == 'function' then
-        print("patch")
         t.handle(points, state, func, t.data)
     end
 end
