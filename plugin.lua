@@ -11,9 +11,45 @@ local tableHandlers = {}
 
 ---@class InsertPoints
 ---@field private points table<number, string>
----@field private functionHooks table<string, FunctionHandler> hook function0
+---@field private functionHooks table<string, FunctionHandler[]> hook function0
 local InsertPoints = {}
 InsertPoints.__index = InsertPoints
+
+
+---get source code range offset
+---@param state parser.state
+---@param source parser.object
+---@return boolean, number, number
+local function getOffsetRange(state, source)
+    if not state or not source then return false, nil, nil end
+    local p, q = parser.guide.getRange(source)
+    if p then p = parser.guide.positionToOffset(state, p) + 1 end
+    if q then q = parser.guide.positionToOffset(state, q) end
+    return p and q and true or false, p, q
+end
+
+---get source code
+---@param state parser.state
+---@param source? parser.object
+---@return string|nil, number|nil, number|nil
+local function getCode(state, source)
+    if not source then return nil end
+    local result, p, q = getOffsetRange(state, source)
+    if result then
+        return state.lua:sub(p, q), p, q
+    end
+    return nil
+end
+
+---get source code
+---@param state parser.state
+---@param source parser.object
+---@return string|nil, number|nil, number|nil
+local function getNoSpaceCode(state, source)
+    local code, p, q = getCode(state, source)
+    if code then return code:gsub("%s", ""), p, q end
+    return nil
+end
 
 ---@return InsertPoints
 function InsertPoints.new()
@@ -38,7 +74,8 @@ end
 ---@param handler FunctionHandler
 function InsertPoints:hookFunctionDefine(funcName, handler)
     if funcName then
-        self.functionHooks[funcName] = handler
+        self.functionHooks[funcName] = self.functionHooks[funcName] or {}
+        table.insert(self.functionHooks[funcName], handler)
     end
 end
 
@@ -46,10 +83,12 @@ end
 ---@return table<parser.object, FunctionHandler> map setvalue source to handler
 function InsertPoints:getFunctionHooks()
     local result = {}
-    for funcName, handler in pairs(self.functionHooks) do
-        local setVar = self:findVar(funcName, handler.offset)
-        if setVar then
-            result[setVar] = handler
+    for funcName, handlers in pairs(self.functionHooks) do
+        for _, handler in ipairs(handlers) do
+            local setVar = self:findVar(funcName, handler.offset)
+            if setVar then
+                result[setVar] = handler
+            end
         end
     end
     return result
@@ -85,43 +124,48 @@ function InsertPoints:scanBlock(state, ast)
     }
 
     ---@param src parser.object
-    local function foreach (src, node) 
+    local function foreach (src, node, deep)
         parser.guide.eachChild(src, function (child)
             if not child then return end
             if parser.guide.blockTypes[child.type] then
-                local tail = nil
-                if ast.finish then tail = parser.guide.offsetToPosition(state, ast.finish) end
+                local _, offset, tail = getOffsetRange(state, child)
                 local t = {
-                    offset = parser.guide.offsetToPosition(state, child.start),
+                    offset = offset,
                     tail = tail,
                     src = child,
                     locals = {},
                     children = {}
                 }
                 table.insert(node.children, t)
-                foreach(child, t)
+                foreach(child, t, deep + 1)
             elseif child.type == "local" or child.type == "setlocal" then
                 local var = parser.guide.getKeyName(child)
                 if var then
+                    local _, offset = getOffsetRange(state, child)
                     node.locals[var] = node.locals[var] or {}
                     table.insert(node.locals[var], {
-                        offset = parser.guide.offsetToPosition(state, child.start),
+                        offset = offset,
                         src = child
                     })
                 end
+                foreach(child, node, deep + 1)
             elseif child.type == "setglobal" then
                 local var = parser.guide.getKeyName(child)
                 if var then
+                    local _, offset = getOffsetRange(state, child)
                     globals[var] = globals[var] or {}
                     table.insert(globals[var], {
-                        offset = parser.guide.offsetToPosition(state, child.start),
+                        offset = offset,
                         src = child
                     })
                 end
+                foreach(child, node, deep + 1)
+            else
+                foreach(child, node, deep + 1)
             end
         end)      
     end
-    foreach(ast, head)
+    foreach(ast, head, 0)
     return head, globals
 end
 
@@ -143,14 +187,13 @@ function InsertPoints:findLocalVar(name, offset)
     local function search(node)
         for _, var in ipairs(node.locals[name] or {}) do
             local sub = offset - var.offset
-            if sub < 0 then sub = -sub end
-            if mostNear == -1 or (sub > 0 and sub < mostNear) then
+            if sub > 0 and (mostNear == -1 or sub < mostNear) then
                 result = var.src
                 mostNear = sub
             end
         end
         
-        for i = #node, 1, -1 do
+        for i = #node.children, 1, -1 do
             local child = node.children[i]
             if child.offset <= offset and (child.tail or offset) >= offset then
                 search(child)
@@ -172,8 +215,7 @@ function InsertPoints:findGlobalVar(name, offset)
     local result = nil
     for _, var in ipairs(self.globals[name] or {}) do
         local sub = offset - var.offset
-        if sub < 0 then sub = -sub end
-        if mostNear == -1 or (sub > 0 and sub < mostNear) then
+        if sub > 0 and (mostNear == -1 or sub < mostNear) then
             result = var.src
             mostNear = sub
         end
@@ -199,40 +241,6 @@ function InsertPoints:findVar(name, offset)
     else
         return result2
     end
-end
-
----get source code range offset
----@param state parser.state
----@param source parser.object
----@return boolean, number, number
-local function getOffsetRange(state, source)
-    if not state or not source then return false, nil, nil end
-    local p, q = parser.guide.getRange(source)
-    if not p or not q then return false, nil, nil end
-    return true, parser.guide.positionToOffset(state, p) + 1, parser.guide.positionToOffset(state, q)
-end
-
----get source code
----@param state parser.state
----@param source? parser.object
----@return string|nil, number|nil, number|nil
-local function getCode(state, source)
-    if not source then return nil end
-    local result, p, q = getOffsetRange(state, source)
-    if result then
-        return state.lua:sub(p, q), p, q
-    end
-    return nil
-end
-
----get source code
----@param state parser.state
----@param source parser.object
----@return string|nil, number|nil, number|nil
-local function getNoSpaceCode(state, source)
-    local code, p, q = getCode(state, source)
-    if code then return code:gsub("%s", ""), p, q end
-    return nil
 end
 
 ---@param state parser.state
@@ -391,7 +399,7 @@ local function handleBukkitEvent(points, state, source, data)
     if child then
         local targetSource = getTableValueSource(state, source) or child
         points:hookFunctionDefine(getCode(state, targetSource), {
-            offset = parser.guide.positionToOffset(state, child.start),
+            offset = parser.guide.positionToOffset(state, targetSource.start),
             handle = hookBukkitEvent,
             data = data,
             type = "table-event"
@@ -470,7 +478,7 @@ local function handleBukkitCommand(points, state, source, data, handler)
     if child then
         local target = getTableValueSource(state, source) or source
         points:hookFunctionDefine(getCode(state, target), {
-            offset = parser.guide.positionToOffset(state, child.start),
+            offset = parser.guide.positionToOffset(state, target.start),
             handle = handler,
             data = data,
             type = "table-command"
