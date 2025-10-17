@@ -491,8 +491,23 @@ end
 local callTable = {
     ["luajava.bindClass"] = luajavaGetTypeFromString,
     ["luajava.newInstance"] = luajavaGetTypeFromString,
-    ["luajava.createProxy"] = luajavaGetTypeFromString,
     ["import"] = luajavaGetTypeFromString,
+
+    ---@param points InsertPoints
+    ---@param state parser.state
+    ---@param source parser.object
+    ["luajava.createProxy"] = function (points, state, source)
+        local arg = parser.guide.getParam(source, 1)
+        if arg and parser.guide.isLiteral(arg) then
+            local type = parser.guide.getLiteral(arg)
+            points:insert(parser.guide.positionToOffset(state, source.finish), "--[[@as " .. type .. "]]")
+            
+            local arg2 = parser.guide.getParam(source, 2)
+            if arg2 then
+                points:insert(parser.guide.positionToOffset(state, arg2.finish), "--[[@as " .. type .. "]]")
+            end
+        end
+    end,
 
     ---@param points InsertPoints
     ---@param state parser.state
