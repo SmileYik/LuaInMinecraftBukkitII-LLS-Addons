@@ -32,11 +32,16 @@ If you use [Visual Studio Code][VSCodeInstall] or [VSCodium][VSCodiumInstall], y
 
 There also have a [vscode project template][vscode-project-template]
 
+## Add your Lua stubs 
+
+You can add your Lua stubs into `library` folder. You can use [LuaInMinecraftBukkitII-LLS-Generator] to generate your Lua stubs of Java library. 
+
 ## Example
 
 ![pic-example]
 
 [LuaInMinecraftBukkitII]: https://github.com/SmileYik/LuaInMinecraftBukkitII
+[LuaInMinecraftBukkitII-LLS-Generator]: https://github.com/SmileYik/LuaInMinecraftBukkitII-LLS-Generator
 [Lua Language Server]: https://luals.github.io/
 [lls-addon-template]: https://github.com/LuaLS/addon-template
 [LuaLS-Install]: https://luals.github.io/#install
